@@ -4,8 +4,8 @@ Created on Sat Mar 11 00:38:57 2023
 
 @author: tcava
 """
-from jax.config import config
-config.update("jax_enable_x64", True)
+from jax import config
+config.update('jax_enable_x64', True)
 from functools import partial
 from jax import jit as njit
 from jax import lax
@@ -16,65 +16,77 @@ from scipy import optimize
 import numpy as nnp
 # import numpy as np
 from jax import numpy as np
-# import numpy as npp
+import numpy as npp
 # from jax import numpy as nnp
-from jax import jacfwd
+from jax import jacfwd, lax
 # from jax.experimental.host_callback import id_print
-config.update('jax_platform_name', 'cpu')
+
 import pandas as pd
 pd.options.mode.chained_assignment = None
-# data = pd.read_excel('saftgamma_database.xlsx')
-# datakl = pd.read_excel('saftgamma_database.xlsx','unlikemie_kl')
-dataklab = pd.read_excel('SAFT-y-mie_data.xlsx','unlikeasso_kl') 
-
-data = pd.read_excel('SAFT-y-mie_data.xlsx')
+data = pd.read_excel('saftgamma_database.xlsx')
+datakl = pd.read_excel('saftgamma_database.xlsx','unlikemie_kl')
+dataklab = pd.read_excel('saftgamma_database.xlsx','unlikeasso_kl') 
 
 
 class saftymie():
     
     def __init__(self,groups, niki,M=None,deltaHSL=None,deltacpSL=None,TSL=None,
-                 newgroups= None,newniki=None,newsig = None,newla=None,newniast=None,
-                 newSk=None,newNst=None,newnH=None,newne1=None,
+                 newgroups= None,newniki=None,newsig = None,neweps=None,newla=None,
+                 newlr=None,newniast=None,newSk=None,newNst=None,newnH=None,newne1=None,
                  newne2=None,newepskl=None,newlrkl=None,newepsAB=None,newKAB=None,
                  newmu=None,newQ=None):
                
         
-        allgroups = data.groups
-
-
-        eps_kl = pd.read_excel('SAFT-y-mie_data.xlsx','eps_kl')
-        eps_kl.index = allgroups
-        eps_kl = eps_kl[eps_kl.index.isin(groups)][groups].reindex(groups)
-
-        lr_kl = pd.read_excel('SAFT-y-mie_data.xlsx','lr_kl')
-        lr_kl.index = allgroups
-        lr_kl = lr_kl[lr_kl.index.isin(groups)][groups].reindex(groups)
-        
-        
         orddata1 = pd.Index(groups, name='groups')
         data2 = data.set_index('groups').reindex(orddata1).reset_index()
 
-        
-        if  newgroups is not   None:
-            newind = len(groups)
-            eps_kl.insert(newind,newgroups[0],newepskl[:-1], True)
-            eps_kl.loc[newgroups[0]] = newepskl
-            
-            lr_kl.insert(newind,newgroups[0],newlrkl[:-1], True)
-            lr_kl.loc[newgroups[0]] = newlrkl
-            
-            
-            data2.loc[newind]  = newsig
-            data2.loc[newind]  = np.array([0,newniast,newSk,newsig,newepskl[-1],newlrkl[-1],newla,newNst,newnH,newne1,newne2])
-            data2[-1:] = data2[-1:].apply(pd.to_numeric, errors='coerce')
-            data2.groups[-1] = newgroups
-            groups = nnp.append(groups,newgroups)
-            
-            niki = np.append(niki,newniki,axis=0)
-
+        unlkdata2 = datakl[nnp.logical_and(datakl['group_k'].isin(groups), datakl['group_l'].isin(groups))]
     
+        eps_kl_pivot = pd.pivot_table(unlkdata2, values='eps_kl', index='group_k', columns='group_l')
+        eps_kl_arr = eps_kl_pivot.reindex(index=groups, columns=groups) # .fillna(0)
         
-        self.eps_kl = eps_kl.values                    
+        
+        if  neweps is not   None:
+            ind = nnp.where(nnp.isin(groups, newgroups))[0]
+            data2.sigma_kk.values[ind]= newsig
+            data2.eps_kk.values[ind] = neweps
+            data2.la_kk.values[ind] = newla
+            data2.lr_kk.values[ind] = newlr
+            data2.niast.values[ind] = newniast
+            data2.Sk.values[ind] = newSk
+            data2.Nst_kk.values[ind] = newNst
+            data2.nH_kk.values[ind] = newnH
+            data2.ne1_kk.values[ind] = newne1
+            data2.ne2_kk.values[ind] = newne2
+            
+
+        if newepskl is not None:
+            eps_kl_arr.loc[:,newgroups] = eps_kl_arr.loc[:,newgroups].replace({np.nan:newepskl})
+            eps_kl_arr.loc[newgroups,newgroups] = 0
+            # eps_kl_arr[:] = newepskl
+            
+            
+        eps_kl_arr = eps_kl_arr.fillna(0)
+        eps_kl_sym = eps_kl_arr + eps_kl_arr.T 
+        
+        
+        eps_kl_sym.replace(0, np.nan, inplace=True)
+        
+        
+        lr_kl_pivot = pd.pivot_table(unlkdata2, values='lr_kl', index='group_k', columns='group_l')
+        lr_kl_arr = lr_kl_pivot.reindex(index=groups, columns=groups)
+        
+        if newlrkl is not None:
+            lr_kl_arr.loc[:,newgroups] = lr_kl_arr.loc[:,newgroups].replace({np.nan:newlrkl})
+            
+        
+        
+        lr_kl_arr = lr_kl_arr.fillna(0)
+        lr_kl_sym = lr_kl_arr + lr_kl_arr.T 
+        lr_kl_sym.replace(0, np.nan, inplace=True)
+        
+        
+        self.eps_kl = eps_kl_sym.values                    
         self.groups = groups
         self.niki = niki
         
@@ -85,7 +97,7 @@ class saftymie():
         self.ncomp = len(niki[0])
         self.ngroup = len(groups)
         self.M = M
-        self.sigma =  np.array(data2.sigma_kk.values*1e-10) #sigma*1e-10
+        self.sigma =  data2.sigma_kk.values*1e-10 #sigma*1e-10
         
         self.epsilon = data2.eps_kk.values*kb  # epsilon*kb
         self.epsilonkl = ymie_epsilonkl(self.sigma,self.epsilon,self.ngroup,self.eps_kl)
@@ -95,7 +107,7 @@ class saftymie():
         self.lambr = data2.lr_kk.values
         self.lamba = data2.la_kk.values
         self.lamb = np.array([self.lamba, self.lambr])
-        lambr_kl = lr_kl.values
+        lambr_kl = lr_kl_sym.values
         self.lambkl = ymie_lambkl(self.lamb,lambr_kl)
         
         self.phicoef = nnp.array([[ 7.5365557e+00, -3.7604630e+01,  7.1745953e+01, -4.6835520e+01,-2.4679820e+00, -5.0272000e-01,  8.0956883e+00],
@@ -142,10 +154,9 @@ class saftymie():
         
         
         if newNst is not None and newNst != 0 :
-            dataklab2.loc[:,'KAB_kl'][-(len(newKAB)):] = np.nan
-            dataklab2.loc[:,'epsAB_kl'][-(len(newepsAB)):] = np.nan
-            dataklab2.loc[:,'KAB_kl'][-(len(newKAB)):] = newKAB
-            dataklab2.loc[:,'epsAB_kl'][-(len(newepsAB)):] = newepsAB
+            # dataklab2 = dataklab2.replace({np.nan:newepsABKAB})
+            dataklab2.loc[:,'epsAB_kl'] = dataklab2.loc[:,'epsAB_kl'].replace({np.nan:newepsAB})
+            dataklab2.loc[:,'KAB_kl'] = dataklab2.loc[:,'KAB_kl'].replace({np.nan:newKAB})
             
         
         self.dataklab2 = dataklab2
@@ -159,18 +170,6 @@ class saftymie():
         self.eklAB[indxasck,indxascl,indxascak,indxascbl] = self.eklAB[indxascl,indxasck,indxascbl,indxascak] = dataklab2.epsAB_kl.values*kb
         self.kappaklAB[indxasck,indxascl,indxascak,indxascbl] = self.kappaklAB[indxascl,indxasck,indxascbl,indxascak] = dataklab2.KAB_kl.values*1e-30
         
-        if self.ngroupasc == 0:
-            self.ngroupasc = 1
-            self.idkasc = np.array([0])
-            self.idxasc = np.array([0])
-            self.ngroupasc = len(self.idkasc)
-            self.ncompasc = len (self.idxasc)
-            
-            self.eklAB = nnp.zeros([self.ngroupasc,self.ngroupasc,3,3])
-            self.kappaklAB = nnp.ones([self.ngroupasc,self.ngroupasc,3,3])
-            
-            
-            
         
         cpq = np.array([
             [7.56425183020431E-02, -1.28667137050961E-01, 1.28350632316055E-01, -7.25321780970292E-02, 2.57782547511452E-02, -6.01170055221687E-03, 9.33363147191978E-04, -9.55607377143667E-05, 6.19576039900837E-06, -2.30466608213628E-07, 3.74605718435540E-09],
@@ -191,9 +190,6 @@ class saftymie():
         self.deltacpSL = deltacpSL
         self.TSL = TSL
         
-        
-
-
         self.C1 = np.array([
                         [-0.488498, 0.863195, 0.761344, -0.750086, -0.218562, -0.538463],
                         [-0.611295, 1.10339, 0.921359, -0.838804, -0.197999, -0.940714],
@@ -210,95 +206,95 @@ class saftymie():
                         [-1.940503, 3.552034, 2.593808, -2.593808, -0.724353, -4.899975]    ])
         
         
-        # self.muk = data2.Mu.fillna(0).values
-        # self.Qk = data2.Q.fillna(0).values
+        self.muk = data2.Mu.fillna(0).values
+        self.Qk = data2.Q.fillna(0).values
         
-        # # self.idkmulti = (np.unique( np.array( list(np.where(self.Qk!=0)[0]) + list(np.where(self.muk!=0)[0]))))
-        # # self.idkmulti =  np.array( list(np.where(self.Qk!=0)[0]))
-        # # self.idkmulti = nnp.unique(nnp.array([nnp.nonzero(self.Qk)[0]]))#,np.nonzero(self.muk)[0]]))
-        # # self.idkmulti = np.array([6])
-        # self.idkmulti =  nnp.nonzero(self.Qk)[0]
-        # self.ngroupmulti = len(self.idkmulti)
+        # self.idkmulti = (np.unique( np.array( list(np.where(self.Qk!=0)[0]) + list(np.where(self.muk!=0)[0]))))
+        # self.idkmulti =  np.array( list(np.where(self.Qk!=0)[0]))
+        # self.idkmulti = nnp.unique(nnp.array([nnp.nonzero(self.Qk)[0]]))#,np.nonzero(self.muk)[0]]))
+        # self.idkmulti = np.array([6])
+        self.idkmulti =  nnp.nonzero(self.Qk)[0]
+        self.ngroupmulti = len(self.idkmulti)
         
-        # self.muk = self.muk[self.idkmulti]* (1e+4/1.3807) ** 0.5 #2.69122703924268e-06
-        # self.Qk = self.Qk[self.idkmulti]*(1e+4/1.3807) ** 0.5 
+        self.muk = self.muk[self.idkmulti]* (1e+4/1.3807) ** 0.5 #2.69122703924268e-06
+        self.Qk = self.Qk[self.idkmulti]*(1e+4/1.3807) ** 0.5 
         
         
-    #     return
-    # def xk(self,x):
-    #     xk = ymie_xk(x,self.niast,self.niki,self.Sk)
-    #     return xk
+        return
+    def xk(self,x):
+        xk = ymie_xk(x,self.niast,self.niki,self.Sk)
+        return xk
     
-    # def xsk(self,x):
-    #     xsk = ymie_xsk(x,self.niast,self.niki,self.Sk)
-    #     return xsk
+    def xsk(self,x):
+        xsk = ymie_xsk(x,self.niast,self.niki,self.Sk)
+        return xsk
     
-    # def dkk(self,x,T):
+    def dkk(self,x,T):
         
-    #     dkk = ymie_dkk(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
-    #     return dkk
+        dkk = ymie_dkk(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
+        return dkk
     
-    # def dkl(self,x,T):
+    def dkl(self,x,T):
         
-    #     dkl = ymie_dkl(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
-    #     return dkl
+        dkl = ymie_dkl(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
+        return dkl
     
-    # def rhos(self,rho,x):
-    #     rhos = ymie_rhos(rho,x,self.niast,self.niki,self.Sk)
-    #     return rhos
+    def rhos(self,rho,x):
+        rhos = ymie_rhos(rho,x,self.niast,self.niki,self.Sk)
+        return rhos
     
-    # def epsilonkl(self):
-    #     epsilonkl = ymie_epsilonkl(self.sigma,self.epsilon,self.ngroup,self.eps_kl)
-    #     return epsilonkl
+    def epsilonkl(self):
+        epsilonkl = ymie_epsilonkl(self.sigma,self.epsilon,self.ngroup,self.eps_kl)
+        return epsilonkl
     
-    # def epsilonmed(self):
-    #     epsilonmed = ymie_epsilonmed(self.epsilon,self.epsilonkl,self.sigma,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return epsilonmed
+    def epsilonmed(self):
+        epsilonmed = ymie_epsilonmed(self.epsilon,self.epsilonkl,self.sigma,self.ngroup,self.niast,self.niki,self.Sk)
+        return epsilonmed
     
-    # def csim(self,rho,x,T):
+    def csim(self,rho,x,T):
         
-    #     csim = ymie_csim(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.niast,self.niki,self.Sk,self.ngroup)
-    #     return csim
+        csim = ymie_csim(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.niast,self.niki,self.Sk,self.ngroup)
+        return csim
     
-    # def A_hs(self,rho,x,T):
-    #     A_hs = ymie_A_hs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.niast,self.niki,self.Sk,self.ngroup)
-    #     return A_hs
+    def A_hs(self,rho,x,T):
+        A_hs = ymie_A_hs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.niast,self.niki,self.Sk,self.ngroup)
+        return A_hs
     
-    # def a1(self,rho,x,T):
-    #     a1 = ymie_a1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return a1
+    def a1(self,rho,x,T):
+        a1 = ymie_a1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return a1
     
-    # def A1(self,rho,x,T):
-    #     A1 = ymie_A1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return A1           
+    def A1(self,rho,x,T):
+        A1 = ymie_A1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return A1           
     
     # def csikleff(self,rho,x):
     #     csikleff = ymie_csikleff(rho,x,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
     #     return csikleff
     
-    # def csimedeff(self,rho,x,T):
+    def csimedeff(self,rho,x,T):
 
-    #     csikleff = ymie_csikleff(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return csikleff
+        csikleff = ymie_csikleff(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return csikleff
 
-    # def csix(self,rho,x,T):
-    #     csix = ymie_csix(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return csix
+    def csix(self,rho,x,T):
+        csix = ymie_csix(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        return csix
     
-    # def Bkl(self,rho,x,T):
-    #     medlamb = np.array([(self.lamb[1]+self.lamb[0]), (self.lamb[1]+self.lamb[0])])
-    #     Bkl = ymie_Bkl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,medlamb,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return Bkl
+    def Bkl(self,rho,x,T):
+        medlamb = np.array([(self.lamb[1]+self.lamb[0]), (self.lamb[1]+self.lamb[0])])
+        Bkl = ymie_Bkl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,medlamb,self.ngroup,self.niast,self.niki,self.Sk)
+        return Bkl
     
-    # def x0kl(self,x,T):
+    def x0kl(self,x,T):
 
-    #     x0kl = ymie_x0kl(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
+        x0kl = ymie_x0kl(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup)
         
-    #     return x0kl
+        return x0kl
     
-    # def a1skl(self,rho,x,T):
-    #     a1skl = ymie_a1skl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return a1skl 
+    def a1skl(self,rho,x,T):
+        a1skl = ymie_a1skl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return a1skl 
     
     # def a1kl(self,rho,x,T):
 
@@ -306,111 +302,99 @@ class saftymie():
     #     a1kl = ymie_a1kl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,csix)
     #     return a1kl
     
-    # def a1kl(self,rho,x,T):
-    #     a1kl = ymie_a1kl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return a1kl
+    def a1kl(self,rho,x,T):
+        a1kl = ymie_a1kl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return a1kl
     
     
-    # def Khs(self,rho,x,T):
-    #     Khs = ymie_Khs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return Khs
+    def Khs(self,rho,x,T):
+        Khs = ymie_Khs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        return Khs
         
-    # def fm(self):
+    def fm(self):
         
-    #     fm = ymie_fm(self.phicoef,self.lambkl)
-    #     return fm
+        fm = ymie_fm(self.phicoef,self.lambkl)
+        return fm
     
-    # def alphakl(self):
-    #     alphakl = ymie_alphakl(self.lambkl)
-    #     return alphakl
+    def alphakl(self):
+        alphakl = ymie_alphakl(self.lambkl)
+        return alphakl
     
-    # def csixast(self,rho,x):
-    #     csixast = ymie_csixast(rho,x,self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
-    #     return csixast
+    def csixast(self,rho,x):
+        csixast = ymie_csixast(rho,x,self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
+        return csixast
     
-    # def chikl(self,rho,x):
-    #     chikl = ymie_chikl(rho,x,self.sigma,self.lamb, self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
-    #     return chikl
+    def chikl(self,rho,x):
+        chikl = ymie_chikl(rho,x,self.sigma,self.lamb, self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
+        return chikl
 
-    # def a2kl(self,rho,x,T):
+    def a2kl(self,rho,x,T):
        
-    #     a2kl = ymie_a2kl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return a2kl
+        a2kl = ymie_a2kl(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return a2kl
     
-    # def a2(self,rho,x,T):
-    #     a2 = ymie_a2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return a2
+    def a2(self,rho,x,T):
+        a2 = ymie_a2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return a2
     
-    # def a3(self,rho,x,T):
-    #     a3 = ymie_a3(rho,x,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
-    #     return a3
+    def a3(self,rho,x,T):
+        a3 = ymie_a3(rho,x,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
+        return a3
     
-    # def A2(self,rho,x,T):
-    #     A2 = ymie_A2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+    def A2(self,rho,x,T):
+        A2 = ymie_A2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
                             
-    #     return A2
+        return A2
     
-    # def a3kl(self,rho,x):
+    def a3kl(self,rho,x):
         
-    #     a3kl = ymie_a3kl(rho,x,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
-    #     return a3kl
+        a3kl = ymie_a3kl(rho,x,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
+        return a3kl
     
-    # def A3(self,rho,x,T):
-    #     A3 = ymie_A3(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
-    #     return A3           
+    def A3(self,rho,x,T):
+        A3 = ymie_A3(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
+        return A3           
     
-    # def Zki(self):
-    #     Zki = ymie_Zki(self.niast,self.niki,self.Sk)
-    #     return Zki
+    def Zki(self):
+        Zki = ymie_Zki(self.niast,self.niki,self.Sk)
+        return Zki
     
-    # def sigmamed3(self):
-    #     sigmamed3 = ymie_sigmamed3(self.sigma,self.ngroup, self.niast,self.niki,self.Sk)
-    #     return sigmamed3
+    def sigmamed3(self):
+        sigmamed3 = ymie_sigmamed3(self.sigma,self.ngroup, self.niast,self.niki,self.Sk)
+        return sigmamed3
     
-    # def km(self,rho,x,T):
-    #     km = ymie_km(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return km
+    def km(self,rho,x,T):
+        km = ymie_km(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        return km
     
-    # def ghs(self,rho,x,T):
-    #     ghs = ymie_ghs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return ghs
+    def ghs(self,rho,x,T):
+        ghs = ymie_ghs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        return ghs
     
-    # def g1(self,rho,x,T):
-    #     g1 = ymie_g1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return g1
+    def g1(self,rho,x,T):
+        g1 = ymie_g1(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return g1
     
-    # def g2(self,rho,x,T):
-    #     g2= ymie_g2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return g2
+    def g2(self,rho,x,T):
+        g2= ymie_g2(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return g2
     
-    # def lggmie(self,rho,x,T):
-    #     lggmie = ymie_gmie(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return lggmie
+    def lggmie(self,rho,x,T):
+        lggmie = ymie_gmie(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return lggmie
     
-    # def ycii(self,rho,x,T):
-    #     ycii = ymie_ycii(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
-    #     return ycii
+    def ycii(self,rho,x,T):
+        ycii = ymie_ycii(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.phicoef)
+        return ycii
     
-    # def g2mca(self,rho,x,T):
-    #     g2mca =  ymie_g2mca(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return g2mca
+    def g2mca(self,rho,x,T):
+        g2mca =  ymie_g2mca(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return g2mca
     
-    # def Achain(self,rho,x,T):
-    #     Achain = ymie_Achain(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
-    #     return Achain
-    def param_med(self):
-        
+    def Achain(self,rho,x,T):
+        Achain = ymie_Achain(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef)
+        return Achain
     
-        sigmamed3 = ymie_sigmamed3(self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
-        sigmaijmed = ymie_sigmaijmed(self.sigma, self.ngroup,self.niast,self.niki,self.Sk,self.ncomp)
-        epsilonmed = ymie_epsilonmed(self.epsilon,self.epsilonkl,self.sigma,self.ngroup,self.niast,self.niki,self.Sk)
-        epsilonijmed = ymie_epsilonijmed(self.epsilon,self.epsilonkl,self.sigma,self.ngroup,self.niast,self.niki,self.Sk,self.ncomp)
-        lambmed = ymie_lambmed(self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-        
-        return sigmamed3/1e-30,sigmaijmed/1e-10,epsilonmed/kb,epsilonijmed/kb,lambmed
-        
-        
-        
     def AALL(self,rho,x,T):
         
         A_hs = ymie_A_hs(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.niast,self.niki,self.Sk,self.ngroup)
@@ -437,53 +421,53 @@ class saftymie():
         phi = ymie_phi(rho,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
         return phi
     
-    def phi_xTP(self,x,T,P,phase):
-        phi = ymie_phi_xTP(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-        return phi
+    def phi_xTP(self,x,T,P):
+        phiL,phiV,rhoL,rhoV = ymie_phi_xTP(x,T,P,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+        return phiL,phiV,rhoL,rhoV
     
-    # def resi_sat_phis(self,T,P,indxcomp):
+    def resi_sat_phis(self,T,P,indxcomp):
         
-    #     resi_sat_phis = ymie_resi_sat_phis(T,P,indxcomp,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #     dresi_phis_dP = ymie_dresi_sat_phis_dP(T,P,indxcomp,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+        resi_sat_phis = ymie_resi_sat_phis(T,P,indxcomp,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+        dresi_phis_dP = ymie_dresi_sat_phis_dP(T,P,indxcomp,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
         
-    #     return resi_sat_phis,dresi_phis_dP
+        return resi_sat_phis,dresi_phis_dP
     
 
-    # def sat_dens(self,T,Pguess,indxcomp=0,method='hybr',tol=1e-9):
+    def sat_dens(self,T,Pguess,indxcomp=0,method='hybr',tol=1e-9):
         
-    #     x = np.zeros(len(self.niki[0]))
-    #     x = x.at[indxcomp].set(1)
+        x = np.zeros(len(self.niki[0]))
+        x = x.at[indxcomp].set(1)
         
-    #     def residuo(Pi):
-    #         P,=Pi
-    #         phiL,phiV = self.phi_TPx(T,P,x)
-    #         res = phiL[indxcomp]/phiV[indxcomp] - 1 
-    #         f = nnp.asarray([res])
-    #         return f
-    #     ans = optimize.root(residuo, [Pguess,], method=method,tol=tol)
-    #     Psat = ans["x"][0]
-    #     sat_densL,sat_densV = self.dens(T,Psat,x,method=method,xtol=tol,tol=tol)
+        def residuo(Pi):
+            P,=Pi
+            phiL,phiV = self.phi_TPx(T,P,x)
+            res = phiL[indxcomp]/phiV[indxcomp] - 1 
+            f = nnp.asarray([res])
+            return f
+        ans = optimize.root(residuo, [Pguess,], method=method,tol=tol)
+        Psat = ans["x"][0]
+        sat_densL,sat_densV = self.dens(T,Psat,x,method=method,xtol=tol,tol=tol)
         
-    #     return sat_densL,sat_densV,Psat
+        return sat_densL,sat_densV,Psat
     
-    # def sat_P(self,T,Pguess,indxcomp=0,method='hybr',tol=1e-9):
+    def sat_P(self,T,Pguess,indxcomp=0,method='hybr',tol=1e-9):
         
-    #     x = np.zeros(len(self.niki[0]))
-    #     x = x.at[indxcomp].set(1)
+        x = np.zeros(len(self.niki[0]))
+        x = x.at[indxcomp].set(1)
         
-    #     def residuo(Pi):
-    #         P,=Pi
-    #         phiL,phiV = self.phi_TPx(T,P,x)
-    #         phiL = phiL[indxcomp]
-    #         phiV = phiV[indxcomp]
-    #         res = phiL/phiV - 1 
-    #         f = nnp.asarray([res])
-    #         # print(res,phiL,phiV)
-    #         return f
-    #     ans = optimize.root(residuo, [Pguess,], method=method,tol=tol)
-    #     Psat = ans["x"][0]
+        def residuo(Pi):
+            P,=Pi
+            phiL,phiV = self.phi_TPx(T,P,x)
+            phiL = phiL[indxcomp]
+            phiV = phiV[indxcomp]
+            res = phiL/phiV - 1 
+            f = nnp.asarray([res])
+            # print(res,phiL,phiV)
+            return f
+        ans = optimize.root(residuo, [Pguess,], method=method,tol=tol)
+        Psat = ans["x"][0]
         
-    #     return Psat
+        return Psat
     
     
         
@@ -512,58 +496,58 @@ class saftymie():
         alphaP = ymie_alphaP(rhov,x,T,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
         return alphaP
     
-    # def alphaP2(self,T,P,x):
-    #     rhoV = self.dens(T,P,x,'vap')
-    #     drho_dT = jacfwd(self.dens,argnums=0)(T, P, x, 'vap')
-    #     print(drho_dT)
-    #     alphaP = - drho_dT/rhoV
-    #     alphaP = alphaP/(1e+4)
-    #     return alphaP
+    def alphaP2(self,T,P,x):
+        rhoV = self.dens(T,P,x,'vap')
+        drho_dT = jacfwd(self.dens,argnums=0)(T, P, x, 'vap')
+        print(drho_dT)
+        alphaP = - drho_dT/rhoV
+        alphaP = alphaP/(1e+4)
+        return alphaP
     
     
-    # def x0iimed(self,x,T):
-    #     x0iimed = ymie_x0iimed(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return x0iimed
+    def x0iimed(self,x,T):
+        x0iimed = ymie_x0iimed(x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        return x0iimed
     
-    # def a1siimed(self,rho,x,T):
-    #     a1siimed = ymie_a1siimed(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return a1siimed
+    def a1siimed(self,rho,x,T):
+        a1siimed = ymie_a1siimed(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return a1siimed
     
-    # def aklbkl(self,rho,x,T):
-    #     Bkl_2lamb,Bkl_medlamb =  ymie_Bkl_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     a1skl_2lamb,a1skl_medlamb = ymie_a1skl_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return Bkl_2lamb,a1skl_2lamb,Bkl_medlamb,a1skl_medlamb
+    def aklbkl(self,rho,x,T):
+        Bkl_2lamb,Bkl_medlamb =  ymie_Bkl_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        a1skl_2lamb,a1skl_medlamb = ymie_a1skl_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return Bkl_2lamb,a1skl_2lamb,Bkl_medlamb,a1skl_medlamb
     
-    # def suma1sb(self,rho,x,T):
-    #     Biimed_2lamb,Biimed_medlamb = ymie_Biimed_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
-    #     a1siimed_2lamb,a1siimed_medlamb = ymie_a1siimed_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+    def suma1sb(self,rho,x,T):
+        Biimed_2lamb,Biimed_medlamb = ymie_Biimed_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk)
+        a1siimed_2lamb,a1siimed_medlamb = ymie_a1siimed_all(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
 
-    #     return a1siimed_2lamb[0],Biimed_2lamb[0],a1siimed_2lamb[1],Biimed_2lamb[1],a1siimed_medlamb,Biimed_medlamb
+        return a1siimed_2lamb[0],Biimed_2lamb[0],a1siimed_2lamb[1],Biimed_2lamb[1],a1siimed_medlamb,Biimed_medlamb
     
-    # def lambs(self):
-    #     _2lambkl,medlambkl  = ymie_lambkl_all(self.lamb)
-    #     _2lambmed,medlambmed = ymie_lambmed_all(self.lamb,self.ngroup,self.niast,self.niki,self.Sk)
-    #     return _2lambkl,medlambkl,_2lambmed,medlambmed
+    def lambs(self):
+        _2lambkl,medlambkl  = ymie_lambkl_all(self.lamb)
+        _2lambmed,medlambmed = ymie_lambmed_all(self.lamb,self.ngroup,self.niast,self.niki,self.Sk)
+        return _2lambkl,medlambkl,_2lambmed,medlambmed
     
-    # def csikleff(self,rho,x,T):
-    #     csikleff = ymie_csikleff(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
-    #     return csikleff
+    def csikleff(self,rho,x,T):
+        csikleff = ymie_csikleff(rho,x,T,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c)
+        return csikleff
     
-    # def Iij(self,rho,x,T):
-    #     Iij = ymie_Iij(rho,x,T,self.epsilon,self.epsilonkl,self.sigma, self.ngroup,self.niast,self.niki,self.Sk,self.cpq,self.ncomp,self.idxasc)
-    #     return Iij
+    def Iij(self,rho,x,T):
+        Iij = ymie_Iij(rho,x,T,self.epsilon,self.epsilonkl,self.sigma, self.ngroup,self.niast,self.niki,self.Sk,self.cpq,self.ncomp,self.idxasc)
+        return Iij
     
-    # def sigmax3(self,x):
-    #     sigmax3 = ymie_sigmax3(x,self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
-    #     return sigmax3
+    def sigmax3(self,x):
+        sigmax3 = ymie_sigmax3(x,self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
+        return sigmax3
     
-    # def sigmakl(self):
-    #     sigmakl =ymie_sigmakl(self.sigma, self.ngroup)
-    #     return sigmakl
+    def sigmakl(self):
+        sigmakl =ymie_sigmakl(self.sigma, self.ngroup)
+        return sigmakl
     
-    # def Fklab(self,T):
-    #     Fklab = ymie_Fklab(T,self.eklAB)
-    #     # return Fklab
+    def Fklab(self,T):
+        Fklab = ymie_Fklab(T,self.eklAB)
+        return Fklab
     
     def delta(self,rho,x,T):
         delta = ymie_delta(rho,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.ngroup,self.niast,self.niki,self.Sk,self.eklAB, self.kappaklAB,self.cpq,self.ngroupasc,self.idxasc)
@@ -625,21 +609,21 @@ class saftymie():
         return Hexc
     
     
-    # def xsk_multi(self,x):
-    #     ans = ymie_xsk_multi(x,self.niast,self.niki,self.Sk,self.idkmulti)
-    #     return ans
+    def xsk_multi(self,x):
+        ans = ymie_xsk_multi(x,self.niast,self.niki,self.Sk,self.idkmulti)
+        return ans
     
-    # def Qvsmu(self,x):
-    #     ans = ymie_Qvsmu_multi(x,self.niast,self.niki,self.Sk,self.idkmulti,self.Qk,self.muk)
-    #     return ans
+    def Qvsmu(self,x):
+        ans = ymie_Qvsmu_multi(x,self.niast,self.niki,self.Sk,self.idkmulti,self.Qk,self.muk)
+        return ans
     
-    # def sig_multi(self):
-    #     ans = ymie_sig_multi(self.sigma,self.ngroup,self.idkmulti)
-    #     return ans
+    def sig_multi(self):
+        ans = ymie_sig_multi(self.sigma,self.ngroup,self.idkmulti)
+        return ans
     
-    # def A_multi(self,rho,x,T):
-    #     A_multi = ymie_A_multi(rho,x,T,self.epsilonkl,self.sigma,self.ngroup, self.niast, self.niki, self.Sk,self.ngroupmulti,self.idkmulti,self.Qk,self.muk,self.C1,self.C2)
-    #     return A_multi
+    def A_multi(self,rho,x,T):
+        A_multi = ymie_A_multi(rho,x,T,self.epsilonkl,self.sigma,self.ngroup, self.niast, self.niki, self.Sk,self.ngroupmulti,self.idkmulti,self.Qk,self.muk,self.C1,self.C2)
+        return A_multi
     
     def dens(self, T, P, x, phase=None, method=None,xtol=None,tol=None):
         #[molecule/m³] -> *Navo -> [mol/m^3] -> *MW -> [g/m^3]
@@ -696,15 +680,13 @@ class saftymie():
         
         xpuro = np.zeros(len(x))
         xpuro = x.at[indxcomp].set(1)
-        
-        # xpuro[indxcomp] = (1)
 
         rhopuro = self.dens(T,P,xpuro,'liq',tol)
         
         phip = ymie_phi(rhopuro,xpuro,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
         gamma  = phi/phip
 
-        return gamma[indxcomp]
+        return gamma[indxcomp] #,np.log(phip),np.log(phi)
     
     
     def densV(self,x,T,P):
@@ -717,7 +699,7 @@ class saftymie():
         
         return densL
     
-    def dens_NR(self,T,P,x,phase=None):
+    def dens_NR(self,x,T,P,phase=None):
         if phase is None:
             phase=0
             densL = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
@@ -726,7 +708,7 @@ class saftymie():
             dens =  densL,densV
         elif phase == 'liq':
             phase=0
-            dens = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+            dens = densL = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
         elif phase == 'vap':
             phase=1
             dens = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
@@ -735,125 +717,74 @@ class saftymie():
             return
         return dens
     
-    # def dens_kgm3(self,x,T,P,phase=None):
-    #     fac = np.sum(x*self.M)*1e-3/ Navo
-    #    
-    #         phase=0
-    #         densL = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         densL = densL*fac
-    #         phase=1
-    #         densV = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         densV = densV*fac
-    #         dens =  densL,densV
-    #     elif phase == 'liq':
-    #         phase=0
-    #         dens = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         dens = dens*fac
-    #     elif phase == 'vap':
-    #         phase=1
-    #         dens = dens*fac
-    #         dens = ymie_dens(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #     else:
-    #         print('ERROR: the phase values are \'vap\', \'liq\' or None')
-    #         return
-    #     return dens
-    
-    def dens_kgm3_NR(self,x,T,P,phase=None):
-        fac = np.sum(x*self.M)*1e-3/ Navo
-        if phase is None:
-            densL,densV = self.dens_NR(x,T,P,phase)
-            dens = densL*fac,densV*fac
-        else:
-            dens =  self.dens_NR(x,T,P,phase)*fac
-        return dens
-    
-    def dens_kgm3(self,x,T,P,phase=None):
-        fac = np.sum(x*self.M)*1e-3/ Navo
-        if phase is None:
-            densL,densV = self.dens(T, P, x)
-            dens = densL*fac,densV*fac
-        else:
-            dens =  self.dens(T, P, x,phase)*fac
-        return dens
-    
-    def dphi_dP(self,x,T,P,phase):
-        if phase == 'liq':
-            phase = 0
-        else:
-            phase = 1
-         
-        dphi_dP = ymie_dphi_dP(x,T,P,phase,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-        return dphi_dP
-    
-    
+    def densV2(self,x,T,P):
         
-    # def densV2(self,x,T,P):
-        
-    #     etaguessV = 1e-9
-    #     sigmaimed3 = ymie_sigmamed3(self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
-    #     Zi = np.sum(np.einsum('ki,k,k->ki ', self.niki,self.niast,self.Sk),axis=0)
-    #     soma = np.einsum('i,i,i-> ',x,Zi,sigmaimed3)
+        etaguessV = 1e-9
+        sigmaimed3 = ymie_sigmamed3(self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
+        Zi = np.sum(np.einsum('ki,k,k->ki ', self.niki,self.niast,self.Sk),axis=0)
+        soma = np.einsum('i,i,i-> ',x,Zi,sigmaimed3)
             
-    #     rho0 = 6/pi*etaguessV/soma
+        rho0 = 6/pi*etaguessV/soma
         
-    #     tolmax = 1e-5
-    #     itmax = 50
+        tolmax = 1e-5
+        itmax = 20
+    
         
-    #     tol = 1
-    #     it = 0
-    #     pontos = 500
-    #     vrho = nnp.geomspace(1e+19,1.5e+28,pontos)
-    #     vP = nnp.zeros(pontos)
-    #     it_rho = []
-    #     it_rho.append(rho0)
-    #     for i in range (pontos):
-    #         vP[i] = self.P(vrho[i],x,T)
+        tol = 1
+        it = 0
+        pontos = 20
+        vrho = nnp.geomspace(1e+19,1.5e+28,pontos)
+        vP = nnp.zeros(pontos)
+        it_rho = []
+        it_rho.append(rho0)
+        for i in range (pontos):
+            vP[i] = self.P(vrho[i],x,T)
             
         
-    #     while tol>tolmax and it<itmax:
+        while tol>tolmax and it<itmax:
             
-    #         Pcalc = ymie_P(rho0,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         res =  ( Pcalc - P)
-    #         dres = ymie_dPdrho(rho0,x,T,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         grad = -res/dres
-    #         rhon = rho0 + grad
-    #         print(float(rhon),it,res,dres)
-    #         tol = abs((rhon-rho0)/rhon)
-    #         it = it+1
+            Pcalc = ymie_P(rho0,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+            res =  ( Pcalc - P)
+            dres = ymie_dPdrho(rho0,x,T,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+            grad = -res/dres
+            rhon = rho0 + grad
+            print(float(rhon),it,res,dres)
+            tol = abs((rhon-rho0)/rhon)
+            it = it+1
             
-    #         rho0 =rhon*1
-    #         it_rho.append(rho0)
-    #     # return rhon
-    #     return rhon,vP,vrho,it_rho
+            rho0 =rhon*1
+            it_rho.append(rho0)
+        # return rhon
+        return rhon,vP,vrho,it_rho
     
 
-    # def densL2(self,x,T,P):
+    def densL2(self,x,T,P):
         
-    #     etaguessV = 0.5
-    #     sigmaimed3 = ymie_sigmamed3(self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
-    #     Zi = np.sum(np.einsum('ki,k,k->ki ', self.niki,self.niast,self.Sk),axis=0)
-    #     soma = np.einsum('i,i,i-> ',x,Zi,sigmaimed3)
+        etaguessV = 0.5
+        sigmaimed3 = ymie_sigmamed3(self.sigma, self.ngroup,self.niast,self.niki,self.Sk)
+        Zi = np.sum(np.einsum('ki,k,k->ki ', self.niki,self.niast,self.Sk),axis=0)
+        soma = np.einsum('i,i,i-> ',x,Zi,sigmaimed3)
             
-    #     rho0 = 6/pi*etaguessV/soma
+        rho0 = 6/pi*etaguessV/soma
         
-    #     tolmax = 1e-9
-    #     itmax = 200
+        tolmax = 1e-9
+        itmax = 20
         
-    #     tol = 1
-    #     it = 0
+        tol = 1
+        it = 0
         
-    #     while tol>tolmax and it<itmax:
+        while tol>tolmax and it<itmax:
             
-    #         Pcalc = ymie_P(rho0,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         res =  Pcalc - P
-    #         dres = ymie_dPdrho(rho0,x,T,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
-    #         rhon = rho0 - res/dres
+            Pcalc = ymie_P(rho0,x,T,self.ncomp,self.epsilon,self.epsilonkl,self.sigma,self.lamb,self.lambkl,self.ngroup,self.niast,self.niki,self.Sk,self.c,self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+            res =  Pcalc - P
+            dres = ymie_dPdrho(rho0,x,T,self.ncomp, self.epsilon,self.epsilonkl, self.sigma, self.lamb,self.lambkl, self.ngroup, self.niast, self.niki, self.Sk, self.c, self.phicoef,self.eklAB,self.kappaklAB,self.cpq,self.nka,self.nsite,self.ngroupasc,self.ncompasc,self.idxasc,self.idkasc)
+            rhon = rho0 - res/dres
             
-    #         tol = abs((rhon-rho0)/rhon)
-    #         it = it+1
+            tol = abs((rhon-rho0)/rhon)
+            it = it+1
             
-    #         rho0 =rhon*1
-    #     return rhon
+            rho0 =rhon*1
+        return rhon
     
     
     
@@ -928,7 +859,7 @@ def ymie_sigmakl(sigma, ngroup):
     return sigmakl
 
 # cnv
-@partial(njit, static_argnames=[ 'ngroup' ] )
+@partial(njit, static_argnames=['ngroup'] )
 def ymie_epsilonkl(sigma,epsilon,ngroup,eps_kl):
     
     sigmakl = ymie_sigmakl(sigma, ngroup)                                       
@@ -1634,7 +1565,7 @@ def ymie_A3(rho,x,T,epsilon,epsilonkl,sigma,lamb,lambkl,ngroup,niast,niki,Sk,phi
     return A3
 
 #EQ39 cnv
-@partial(njit, static_argnames=['ngroup'] )
+@partial(njit )
 def ymie_fm(phicoef,lambkl):
     
     alphakl = ymie_alphakl(lambkl)
@@ -1823,28 +1754,13 @@ def ymie_phi(rho,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast
     phi = np.exp(lnphi)
     return phi
 
-# @partial(njit, static_argnames=['ncomp','ngroup','nsite','ngroupasc','ncompasc'])
-# def ymie_phi_xTP(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc):
-#     rhoL = ymie_densL(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-#     phiL = ymie_phi(rhoL,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-#     rhoV = ymie_densV(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-#     phiV = ymie_phi(rhoV,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-#     return phiL,phiV,rhoL,rhoV
-
 @partial(njit, static_argnames=['ncomp','ngroup','nsite','ngroupasc','ncompasc'])
-def ymie_phi_xTP(x,T,P,phase,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc):
-    rho = ymie_dens(x,T,P,phase,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-    phi = ymie_phi(rho,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-    return phi
-
-
-
-@partial(njit, static_argnames=['ncomp','ngroup','nsite','ngroupasc','ncompasc'])
-def ymie_dphi_dP(x,T,P,phase,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc):
-    dphi_dP = jacfwd(ymie_phi_xTP,argnums=2)(x,T,P,phase,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
-    return dphi_dP
-
-
+def ymie_phi_xTP(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc):
+    rhoL = ymie_densL(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
+    phiL = ymie_phi(rhoL,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
+    rhoV = ymie_densV(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
+    phiV = ymie_phi(rhoV,x,T,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc)
+    return phiL,phiV,rhoL,rhoV
 
 @partial(njit, static_argnames=['ncomp','ngroup','nsite','ngroupasc','ncompasc'])
 def ymie_resi_sat_phis(T,P,indxcomp,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast, niki, Sk, c, phicoef,eklAB,kappaklAB,cpq,nka,nsite,ngroupasc,ncompasc,idxasc,idkasc):
@@ -1971,7 +1887,7 @@ def ymie_X_tan(rho,x,T,ncomp,epsilon,epsilonkl,sigma,ngroup,niast,niki,Sk,eklAB,
         X_A = args[1]
         it=args[2]
         resmin = 3.e-10
-        itMAX = 1e+6
+        itMAX = 1e+5
         dif = ((X_A-X_A_old)/X_A)**2
         res = nnp.max(dif)*1
         cond1 = res>resmin
@@ -1981,7 +1897,7 @@ def ymie_X_tan(rho,x,T,ncomp,epsilon,epsilonkl,sigma,ngroup,niast,niki,Sk,eklAB,
     _,X_A,fabricio = lax.while_loop(cond_fun, itX_A, [X_A_old,X_A,fabricio])
     return X_A#,fabricio
 
-@partial(njit, static_argnames=['ncomp','ngroup','nsite','ngroupasc'])
+@partial(njit, static_argnames=['ncomp','ngroup','ngroupasc'])
 def ymie_delta(rho,x,T,ncomp,epsilon,epsilonkl,sigma,ngroup,niast,niki,Sk,eklAB, kappaklAB,cpq,ngroupasc,idxasc):
 
     Fklab = ymie_Fklab(T,eklAB)
@@ -1990,7 +1906,7 @@ def ymie_delta(rho,x,T,ncomp,epsilon,epsilonkl,sigma,ngroup,niast,niki,Sk,eklAB,
 
     return delta
 
-@partial(njit, static_argnames=['ncomp','ngroup','ngroupasc'])
+@partial(njit)
 def ymie_Fklab(T,eklAB):
     # eklAB =  ymie_eklAB(eklAB,ngroupasc)
     Fklab = np.exp(eklAB/(kb*T))-1
@@ -1999,7 +1915,7 @@ def ymie_Fklab(T,eklAB):
     
 
 
-@partial(njit, static_argnames=['ncomp','ngroup','nsite'])
+@partial(njit, static_argnames=['ncomp','ngroup'])
 def ymie_Iij(rho,x,T,epsilon,epsilonkl,sigma, ngroup,niast,niki,Sk,cpq,ncomp,idxasc):
     
     sigmax3 = ymie_sigmax3(x,sigma, ngroup,niast,niki,Sk)
@@ -2291,7 +2207,7 @@ def ymie_densV(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast
         rho = args[1]
         fabricio=args[2]
         tolmin = 1e-4
-        itMAX = 150
+        itMAX = 20
         tol = abs((rho0-rho)/rho)
         cond1 = tol>tolmin
         cond2 = fabricio<itMAX
@@ -2351,7 +2267,7 @@ def ymie_densL(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast
         rho = args[1]
         fabricio=args[2]
         tolmin = 1e-4
-        itMAX = 15
+        itMAX = 20
         tol = abs((rho0-rho)/rho)
         cond1 = tol>tolmin
         cond2 = fabricio<itMAX
@@ -2361,6 +2277,7 @@ def ymie_densL(x,T,P,ncomp, epsilon,epsilonkl, sigma, lamb,lambkl, ngroup, niast
     _,rho,fabricio = lax.while_loop(cond_fun, itrho, [rhoV00,rhoV0,fabricio])
     
     # L = itrho([rhoV00,rhoV0,fabricio])
+    
     # L = itrho(L)
     
     return rho
